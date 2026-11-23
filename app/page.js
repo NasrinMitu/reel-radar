@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FaArrowRight,
   FaArrowRotateRight,
@@ -11,6 +11,7 @@ import {
   FaCirclePlay,
   FaFilm,
   FaMagnifyingGlass,
+  FaPen,
   FaPlus,
   FaRegClock,
   FaSliders,
@@ -153,14 +154,14 @@ function posterStyle(item, index) {
   };
 }
 
-function InterestModal({ onClose, onSave }) {
-  const [name, setName] = useState("");
-  const [format, setFormat] = useState("both");
-  const [genres, setGenres] = useState([]);
-  const [excludedGenres, setExcludedGenres] = useState([]);
-  const [tagsText, setTagsText] = useState("");
-  const [minRating, setMinRating] = useState(7);
-  const [alerts, setAlerts] = useState(["On Release Day"]);
+function InterestModal({ radar, onClose, onSave }) {
+  const [name, setName] = useState(radar?.name || "");
+  const [format, setFormat] = useState(radar?.format || "both");
+  const [genres, setGenres] = useState(radar?.genres || []);
+  const [excludedGenres, setExcludedGenres] = useState(radar?.excludedGenres || []);
+  const [tagsText, setTagsText] = useState(radar?.tags?.join(", ") || "");
+  const [minRating, setMinRating] = useState(radar?.minRating ?? 7);
+  const [alerts, setAlerts] = useState(radar?.alerts || ["On Release Day"]);
 
   const toggleItem = (items, setItems, value) => {
     setItems(items.includes(value) ? items.filter((item) => item !== value) : [...items, value]);
@@ -170,7 +171,7 @@ function InterestModal({ onClose, onSave }) {
     event.preventDefault();
     if (!name.trim()) return;
     onSave({
-      id: `radar-${Date.now()}`,
+      id: radar?.id || `radar-${Date.now()}`,
       name: name.trim(),
       format,
       genres,
@@ -182,7 +183,7 @@ function InterestModal({ onClose, onSave }) {
         .slice(0, 5),
       minRating: Number(minRating),
       alerts,
-      color: ["#e11d48", "#f59e0b", "#8b5cf6", "#22c55e"][Math.floor(Math.random() * 4)],
+      color: radar?.color || ["#e11d48", "#f59e0b", "#8b5cf6", "#22c55e"][Math.floor(Math.random() * 4)],
     });
   }
 
@@ -192,7 +193,7 @@ function InterestModal({ onClose, onSave }) {
         <div className="flex items-start justify-between gap-5">
           <div>
             <p className="eyebrow">A little more of what you love</p>
-            <h2 id="modal-title" className="mt-2 text-3xl font-semibold tracking-tight">Create an interest</h2>
+            <h2 id="modal-title" className="mt-2 text-3xl font-semibold tracking-tight">{radar ? "Edit interest radar" : "Create an interest"}</h2>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close dialog">
             <FaXmark />
@@ -316,7 +317,7 @@ function InterestModal({ onClose, onSave }) {
           </div>
 
           <button className="primary-button w-full justify-center" type="submit">
-            <FaWandMagicSparkles /> Create my radar
+            <FaWandMagicSparkles /> {radar ? "Save changes" : "Create my radar"}
           </button>
         </form>
       </section>
@@ -328,6 +329,9 @@ export default function Home() {
   const [radars, setRadars] = useState(INITIAL_RADARS);
   const [matches, setMatches] = useState(SAMPLE_TITLES);
   const [previewItem, setPreviewItem] = useState(null);
+  const [editingRadar, setEditingRadar] = useState(null);
+  const [activeRadarFilter, setActiveRadarFilter] = useState(null);
+  const [notificationFilter, setNotificationFilter] = useState("all");
   const [notifications, setNotifications] = useState([]);
   const [activeTab, setActiveTab] = useState("My Radars");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -336,6 +340,7 @@ export default function Home() {
   const [apiError, setApiError] = useState("");
   const [search, setSearch] = useState("");
   const [radarsLoaded, setRadarsLoaded] = useState(false);
+  const feedRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -366,18 +371,50 @@ export default function Home() {
     () => radars.filter((radar) => radar.name.toLowerCase().includes(search.toLowerCase())),
     [radars, search],
   );
+  const currentRadarFilter = radars.find((radar) => radar.id === activeRadarFilter) || null;
+  const filteredMatches = useMemo(
+    () => currentRadarFilter ? matches.filter((item) => item.radar === currentRadarFilter.name) : matches,
+    [currentRadarFilter, matches],
+  );
+  const filteredNotifications = useMemo(() => {
+    if (notificationFilter === "unread") return notifications.filter((item) => !item.read);
+    if (notificationFilter.startsWith("radar:")) {
+      const radar = radars.find((item) => item.id === notificationFilter.slice(6));
+      return radar ? notifications.filter((item) => item.radar === radar.name) : [];
+    }
+    return notifications;
+  }, [notificationFilter, notifications, radars]);
+
+  useEffect(() => {
+    if (activeTab === "Discover Feed" && activeRadarFilter) {
+      requestAnimationFrame(() => feedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
+  }, [activeRadarFilter, activeTab]);
 
   function saveRadar(radar) {
-    setRadars((current) => [radar, ...current]);
+    setRadars((current) => editingRadar
+      ? current.map((item) => item.id === radar.id ? radar : item)
+      : [radar, ...current]);
+    setEditingRadar(null);
     setIsModalOpen(false);
   }
 
   function removeRadar(id) {
     setRadars((current) => current.filter((radar) => radar.id !== id));
+    if (activeRadarFilter === id) setActiveRadarFilter(null);
   }
 
   function markAllRead() {
     setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+  }
+
+  function markNotificationRead(id) {
+    setNotifications((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
+  }
+
+  function selectRadar(radar) {
+    setActiveRadarFilter(radar.id);
+    setActiveTab("Discover Feed");
   }
 
   function makeDemoNotifications() {
@@ -391,6 +428,11 @@ export default function Home() {
         radar: radar.name,
         createdAt: new Date(now - index * 60000).toISOString(),
         poster: title.poster,
+        release_date: title.release_date,
+        overview: title.overview,
+        vote_average: title.vote_average,
+        media_type: title.media_type,
+        badge: title.badge,
         read: false,
       };
     });
@@ -424,6 +466,11 @@ export default function Home() {
           radar: radar.name,
           createdAt: new Date().toISOString(),
           poster: item.poster_path ? `https://image.tmdb.org/t/p/w200${item.poster_path}` : "",
+          release_date: item.release_date,
+          overview: item.overview || "",
+          vote_average: item.vote_average || 0,
+          media_type: item.media_type,
+          badge: item.media_type === "tv" ? "New series" : "Coming soon",
           read: false,
         })),
       );
@@ -461,11 +508,14 @@ export default function Home() {
   }
 
   const openNotifications = () => {
-    setActiveTab("Notifications");
     setIsDrawerOpen(true);
   };
 
-  const navItems = ["My Radars", "Discover Feed", "Notifications"];
+  const navItems = [
+    { label: "My Radars", value: "My Radars" },
+    { label: "Discover Feed", value: "Discover Feed" },
+    { label: "Notifications", value: "notifications" },
+  ];
   const spotlightMatch = matches[0] || SAMPLE_TITLES[0];
   const spotlightImage = spotlightMatch.backdrop || spotlightMatch.poster;
   const spotlightStyle = spotlightImage
@@ -483,12 +533,12 @@ export default function Home() {
         <nav className="main-nav" aria-label="Main navigation">
           {navItems.map((item) => (
             <button
-              className={activeTab === item ? "nav-link active" : "nav-link"}
-              key={item}
-              onClick={() => item === "Notifications" ? openNotifications() : setActiveTab(item)}
+              className={activeTab === item.value ? "nav-link active" : "nav-link"}
+              key={item.value}
+              onClick={() => item.value === "notifications" ? setActiveTab("notifications") : setActiveTab(item.value)}
             >
-              {item}
-              {item === "Notifications" && unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}
+              {item.label}
+              {item.value === "notifications" && unreadCount > 0 && <span className="nav-count">{unreadCount}</span>}
             </button>
           ))}
         </nav>
@@ -511,7 +561,7 @@ export default function Home() {
           </div>
         )}
 
-        {activeTab !== "Notifications" && (
+        {activeTab !== "notifications" && (
           <section className="spotlight" style={spotlightStyle}>
             <div className="spotlight-content">
               <p className="eyebrow"><span className="eyebrow-dot" /> {activeTab === "Discover Feed" ? "PICKED FOR YOUR RADARS" : "YOUR NEXT GREAT WATCH"}</p>
@@ -536,22 +586,44 @@ export default function Home() {
           </section>
         )}
 
-        {activeTab === "Notifications" ? (
-          <section className="content-section">
-            <div className="section-heading">
-              <div><p className="eyebrow">YOUR UPDATES</p><h2>Notifications</h2></div>
-              <button className="secondary-button" onClick={checkForMatches} disabled={isChecking}>
-                <FaArrowRotateRight className={isChecking ? "spin" : ""} /> {isChecking ? "Checking…" : "Check for New Matches"}
-              </button>
+        {activeTab === "notifications" ? (
+          <section className="content-section notification-center">
+            <div className="notification-center-heading">
+              <div>
+                <p className="eyebrow"><span className="eyebrow-dot" /> YOUR UPDATES</p>
+                <h1>Notifications Center</h1>
+                <p className="section-subtitle">A closer look at everything your radars have found.</p>
+              </div>
+              <div className="notification-bulk-actions">
+                <button className="secondary-button" onClick={markAllRead} disabled={!unreadCount}><FaCheck /> Mark all as read</button>
+                <button className="primary-button" onClick={checkForMatches} disabled={isChecking || !radars.length}>
+                  <FaArrowRotateRight className={isChecking ? "spin" : ""} /> {isChecking ? "Checking…" : "Check for New Matches"}
+                </button>
+              </div>
             </div>
-            <div className="notification-list inline-notifications">
-              {notifications.length ? notifications.map((item) => (
-                <NotificationRow item={item} key={item.id} />
-              )) : <EmptyState title="All caught up" copy="Check for new matches and we’ll let you know when something good is on the way." />}
+            <div className="notification-filters" aria-label="Filter notifications">
+              <button className={notificationFilter === "all" ? "filter-pill active" : "filter-pill"} onClick={() => setNotificationFilter("all")}>All Alerts <span>{notifications.length}</span></button>
+              <button className={notificationFilter === "unread" ? "filter-pill active" : "filter-pill"} onClick={() => setNotificationFilter("unread")}>Unread <span>{unreadCount}</span></button>
+              {radars.map((radar) => (
+                <button className={notificationFilter === `radar:${radar.id}` ? "filter-pill active radar-filter" : "filter-pill radar-filter"} key={radar.id} onClick={() => setNotificationFilter(`radar:${radar.id}`)}>
+                  <i style={{ backgroundColor: radar.color || "#e11d48" }} /> {radar.name}
+                </button>
+              ))}
+            </div>
+            <div className="notification-center-list">
+              {filteredNotifications.length ? filteredNotifications.map((item) => (
+                <NotificationCard
+                  item={item}
+                  key={item.id}
+                  onMarkRead={() => markNotificationRead(item.id)}
+                  onPreview={() => setPreviewItem(item)}
+                />
+              )) : <EmptyState title={notificationFilter === "unread" ? "You’re all caught up" : "No alerts here yet"} copy="Check for new matches to see what your radars have found." />}
             </div>
           </section>
         ) : (
           <>
+            {activeTab === "My Radars" && (
             <section className="content-section radar-section">
               <div className="section-heading">
                 <div>
@@ -566,6 +638,7 @@ export default function Home() {
                     <FaMagnifyingGlass />
                     <input aria-label="Search radars" onChange={(event) => setSearch(event.target.value)} placeholder="Find a radar" value={search} />
                   </label>
+                  <button className="text-link notification-center-link" onClick={() => setActiveTab("notifications")}>View notifications <FaArrowRight /></button>
                   <button className="primary-button" onClick={() => setIsModalOpen(true)}><FaPlus /> New radar</button>
                 </div>
               </div>
@@ -573,12 +646,29 @@ export default function Home() {
               {visibleRadars.length ? (
                 <div className="radar-grid">
                   {visibleRadars.map((radar, index) => (
-                    <article className="radar-card" key={radar.id} style={{ "--radar-accent": radar.color || "#e11d48" }}>
+                    <article
+                      className="radar-card"
+                      key={radar.id}
+                      onClick={() => selectRadar(radar)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectRadar(radar);
+                        }
+                      }}
+                      role="group"
+                      tabIndex={0}
+                      style={{ "--radar-accent": radar.color || "#e11d48" }}
+                      aria-label={`Show matches for ${radar.name}`}
+                    >
                       <div className={`radar-card-art art-${index % 4}`}>
                         <div className="radar-orbit orbit-one" /><div className="radar-orbit orbit-two" />
                         <span className="radar-art-icon">{radar.format === "movie" ? <FaFilm /> : radar.format === "tv" ? <FaTv /> : <FaCirclePlay />}</span>
                         <span className="radar-format">{mediaLabel(radar.format)}</span>
-                        <button className="radar-menu" aria-label={`Delete ${radar.name}`} onClick={() => removeRadar(radar.id)}><FaTrash /></button>
+                        <div className="radar-card-actions">
+                          <button className="radar-menu" aria-label={`Edit ${radar.name}`} onClick={(event) => { event.stopPropagation(); setEditingRadar(radar); setIsModalOpen(true); }} onKeyDown={(event) => event.stopPropagation()}><FaPen /></button>
+                          <button className="radar-menu delete" aria-label={`Delete ${radar.name}`} onClick={(event) => { event.stopPropagation(); removeRadar(radar.id); }} onKeyDown={(event) => event.stopPropagation()}><FaTrash /></button>
+                        </div>
                       </div>
                       <div className="radar-card-body">
                         <div className="flex items-start justify-between gap-3">
@@ -604,14 +694,21 @@ export default function Home() {
                 </div>
               ) : <EmptyState title="No radars found" copy="Try a different search or create a new interest radar." />}
             </section>
+            )}
 
-            <section className="content-section feed-section">
+            <section className="content-section feed-section" id="discover-feed" ref={feedRef}>
               <div className="section-heading feed-heading">
                 <div><p className="eyebrow">FRESH ON YOUR FREQUENCY</p><h2>Coming into focus</h2><p className="section-subtitle">A few things we think you’ll want to know about.</p></div>
                 <button className="text-link" onClick={() => setActiveTab("Discover Feed")}>Explore discover feed <FaArrowRight /></button>
               </div>
+              {activeRadarFilter && currentRadarFilter && (
+                <div className="radar-filter-banner">
+                  <span>Showing matches for: <b>{currentRadarFilter.name}</b></span>
+                  <button onClick={() => setActiveRadarFilter(null)}>Clear Filter <FaXmark /></button>
+                </div>
+              )}
               <div className="title-grid">
-                {matches.map((item, index) => <TitleCard item={item} index={index} key={item.id} />)}
+                {filteredMatches.length ? filteredMatches.map((item, index) => <TitleCard item={item} index={index} key={item.id} />) : <EmptyState title="No matches for this radar yet" copy="Check for new matches and we’ll let you know when something fits." />}
               </div>
             </section>
 
@@ -629,7 +726,7 @@ export default function Home() {
         <footer className="page-footer"><span>Made for people who love a good story.</span><span>Powered by your taste <span className="footer-spark">✳</span></span></footer>
       </div>
 
-      {isModalOpen && <InterestModal onClose={() => setIsModalOpen(false)} onSave={saveRadar} />}
+      {isModalOpen && <InterestModal key={editingRadar?.id || "new"} radar={editingRadar} onClose={() => { setIsModalOpen(false); setEditingRadar(null); }} onSave={saveRadar} />}
 
       {previewItem && (
         <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setPreviewItem(null)}>
@@ -695,6 +792,48 @@ function TitleCard({ item, index }) {
       </div>
     </article>
   );
+}
+
+function NotificationCard({ item, onMarkRead, onPreview }) {
+  const releaseDate = item.release_date || item.releaseDate;
+  const mediaType = item.media_type || "movie";
+
+  return (
+    <article className={item.read ? "notification-card read" : "notification-card unread"}>
+      <div className="notification-card-poster" style={item.poster ? { backgroundImage: `url("${item.poster.replace("/w200", "/w500")}")` } : undefined}>
+        {!item.poster && <FaCirclePlay />}
+        <span className="notification-card-rating"><FaStar /> {Number(item.vote_average || 0).toFixed(1)}</span>
+      </div>
+      <div className="notification-card-content">
+        <div className="notification-card-topline">
+          <span className="notification-card-type">{mediaLabel(mediaType)}</span>
+          <span className="notification-time">{releaseDate ? formatDate(releaseDate) : "Release date TBA"} <i>·</i> {formatRelativeTime(item.createdAt)}</span>
+        </div>
+        <h2>{item.title}</h2>
+        <p className="notification-card-description">{item.overview || item.message || "A new title matched your interests. Open the preview for more details."}</p>
+        <div className="notification-card-footer">
+          <span className="notification-radar-badge"><FaWandMagicSparkles /> {item.radar || "Interest Radar"}</span>
+          <div className="notification-card-actions">
+            <button className="notification-preview-button" onClick={onPreview}>Preview Details <FaArrowRight /></button>
+            <button className="notification-read-button" onClick={onMarkRead} disabled={item.read}>
+              {item.read ? <><FaCheck /> Read</> : <><FaCheck /> Mark Read</>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "Recently";
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  if (!Number.isFinite(elapsedMinutes)) return "Recently";
+  if (elapsedMinutes < 1) return "Just now";
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+  return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
 function NotificationRow({ item }) {
