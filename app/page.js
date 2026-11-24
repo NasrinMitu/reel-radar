@@ -131,6 +131,106 @@ const POSTER_BACKDROPS = [
 
 const ALERT_OPTIONS = ["On Release Day", "New Season", "Trailer Drop"];
 
+function getAlertKey(item) {
+  const radarId = item.radarId || item.radar || "unknown-radar";
+  const mediaType = item.mediaType || item.type || item.media_type || "unknown";
+  const tmdbId = item.tmdbId || item.id;
+  return tmdbId === undefined || tmdbId === null
+    ? null
+    : `${radarId}-${mediaType}-${tmdbId}`;
+}
+
+function normalizeNotification(item, radars) {
+  if (!item || typeof item !== "object") return null;
+
+  const radar = radars.find((candidate) =>
+    candidate.id === item.radarId || candidate.name === item.radar,
+  );
+  const legacyRadarId = radar?.id || item.radarId || item.radar || "unknown-radar";
+  const legacyId = String(item.id ?? "");
+  const legacyTmdbIdMarker = `-${legacyRadarId}-`;
+  const legacyTmdbIdEnd = legacyId.startsWith("tmdb-")
+    ? legacyId.indexOf(legacyTmdbIdMarker, 5)
+    : -1;
+  const sample = SAMPLE_TITLES.find((title) => title.title === item.title);
+  const mediaType = item.mediaType || item.type || item.media_type || sample?.media_type || "unknown";
+  const tmdbId =
+    item.tmdbId ||
+    (legacyTmdbIdEnd > 5 ? legacyId.slice(5, legacyTmdbIdEnd) : null) ||
+    (legacyId.startsWith("demo-") ? sample?.id : null) ||
+    item.id;
+  if (tmdbId === undefined || tmdbId === null) return null;
+
+  const normalized = {
+    ...item,
+    radarId: legacyRadarId,
+    radar: radar?.name || item.radar || legacyRadarId,
+    tmdbId: String(tmdbId),
+    mediaType,
+    releaseDate: item.releaseDate || item.release_date || sample?.release_date || "",
+    rating: item.rating ?? item.vote_average ?? sample?.vote_average ?? 0,
+    overview: item.overview || sample?.overview || "",
+    posterUrl: item.posterUrl || item.poster || item.poster_path || "",
+  };
+  normalized.release_date = normalized.releaseDate;
+  normalized.vote_average = normalized.rating;
+  normalized.media_type = normalized.mediaType;
+  normalized.poster = normalized.posterUrl;
+  normalized.id = getAlertKey(normalized);
+  return normalized;
+}
+
+function metadataCompleteness(item) {
+  return ["releaseDate", "rating", "overview", "posterUrl"].reduce((score, field) => {
+    const value = item[field];
+    return score + (value !== undefined && value !== null && value !== "" && value !== 0 ? 1 : 0);
+  }, 0);
+}
+
+function mergeNotificationMetadata(preferred, other) {
+  const merged = { ...other, ...preferred };
+  for (const field of ["releaseDate", "rating", "overview", "posterUrl"]) {
+    const value = preferred[field];
+    if (value === undefined || value === null || value === "" || value === 0) {
+      merged[field] = other[field] ?? value;
+    }
+  }
+  merged.read = Boolean(preferred.read || other.read);
+  merged.createdAt = preferred.createdAt || other.createdAt;
+  return normalizeNotification(merged, []);
+}
+
+function deduplicateNotifications(items, radars) {
+  const byKey = new Map();
+  for (const candidate of items) {
+    const normalized = normalizeNotification(candidate, radars);
+    if (!normalized) continue;
+
+    const existing = byKey.get(normalized.id);
+    if (!existing) {
+      byKey.set(normalized.id, normalized);
+      continue;
+    }
+
+    const preferred = metadataCompleteness(normalized) > metadataCompleteness(existing)
+      ? normalized
+      : existing;
+    const other = preferred === normalized ? existing : normalized;
+    byKey.set(normalized.id, mergeNotificationMetadata(preferred, other));
+  }
+  return [...byKey.values()];
+}
+
+function countNewNotifications(existing, incoming) {
+  const knownKeys = new Set(existing.map(getAlertKey).filter(Boolean));
+  const newKeys = new Set();
+  for (const item of incoming) {
+    const key = getAlertKey(item);
+    if (key) newKeys.add(key);
+  }
+  return [...newKeys].filter((key) => !knownKeys.has(key)).length;
+}
+
 function formatDate(date) {
   if (!date) return "Date TBA";
   return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
@@ -338,6 +438,7 @@ export default function Home() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
   const [search, setSearch] = useState("");
   const [radarsLoaded, setRadarsLoaded] = useState(false);
   const feedRef = useRef(null);
@@ -346,8 +447,15 @@ export default function Home() {
     try {
       const savedRadars = window.localStorage.getItem("reel-radar-radars");
       const savedNotifications = window.localStorage.getItem("reel-radar-notifications");
-      if (savedRadars) setRadars(JSON.parse(savedRadars));
-      if (savedNotifications) setNotifications(JSON.parse(savedNotifications));
+      const parsedRadars = savedRadars ? JSON.parse(savedRadars) : null;
+      const loadedRadars = Array.isArray(parsedRadars) ? parsedRadars : INITIAL_RADARS;
+      if (Array.isArray(parsedRadars)) setRadars(parsedRadars);
+      if (savedNotifications) {
+        const parsedNotifications = JSON.parse(savedNotifications);
+        if (Array.isArray(parsedNotifications)) {
+          setNotifications(deduplicateNotifications(parsedNotifications, loadedRadars));
+        }
+      }
     } catch (error) {
       console.error("Could not load saved Reel Radar data:", error);
     } finally {
@@ -365,6 +473,12 @@ export default function Home() {
       setApiError("Your browser couldn’t save changes. Check local storage settings.");
     }
   }, [radars, notifications, radarsLoaded]);
+
+  useEffect(() => {
+    if (!statusMessage) return undefined;
+    const timeout = window.setTimeout(() => setStatusMessage(""), 3500);
+    return () => window.clearTimeout(timeout);
+  }, [statusMessage]);
 
   const unreadCount = notifications.filter((item) => !item.read).length;
   const visibleRadars = useMemo(
@@ -408,6 +522,10 @@ export default function Home() {
     setNotifications((current) => current.map((item) => ({ ...item, read: true })));
   }
 
+  function clearNotifications() {
+    setNotifications([]);
+  }
+
   function markNotificationRead(id) {
     setNotifications((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
   }
@@ -423,13 +541,19 @@ export default function Home() {
       const title = SAMPLE_TITLES[index % SAMPLE_TITLES.length];
       return {
         id: `demo-${now}-${index}`,
+        radarId: radar.id,
+        tmdbId: String(title.id),
+        mediaType: title.media_type,
         title: title.title,
         message: index === 1 ? "A new season is on the way" : "A fresh match just landed on your radar",
         radar: radar.name,
         createdAt: new Date(now - index * 60000).toISOString(),
         poster: title.poster,
-        release_date: title.release_date,
+        posterUrl: title.poster || "",
+        releaseDate: title.release_date,
+        rating: title.vote_average,
         overview: title.overview,
+        release_date: title.release_date,
         vote_average: title.vote_average,
         media_type: title.media_type,
         badge: title.badge,
@@ -442,6 +566,7 @@ export default function Home() {
     if (!radars.length || isChecking) return;
     setIsChecking(true);
     setApiError("");
+    setStatusMessage("");
     try {
       const responses = await Promise.all(
         radars.map(async (radar) => {
@@ -458,19 +583,25 @@ export default function Home() {
           return { radar, results: data.results || [] };
         }),
       );
-      const fresh = responses.flatMap(({ radar, results }) =>
-        results.slice(0, 2).map((item, index) => ({
-          id: `tmdb-${item.id}-${radar.id}-${Date.now()}-${index}`,
+      const incoming = responses.flatMap(({ radar, results }) =>
+        results.slice(0, 2).map((item) => ({
+          radarId: radar.id,
+          tmdbId: String(item.tmdbId || item.id),
+          mediaType: item.mediaType || item.type || item.media_type,
           title: item.title || item.name,
           message: "A new match just landed on your radar",
           radar: radar.name,
           createdAt: new Date().toISOString(),
-          poster: item.poster_path ? `https://image.tmdb.org/t/p/w200${item.poster_path}` : "",
-          release_date: item.release_date,
+          posterUrl: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
+          poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
+          releaseDate: item.releaseDate || item.release_date || item.first_air_date || "",
+          rating: item.rating ?? item.vote_average ?? 0,
           overview: item.overview || "",
-          vote_average: item.vote_average || 0,
-          media_type: item.media_type,
-          badge: item.media_type === "tv" ? "New series" : "Coming soon",
+          type: item.type || item.mediaType || item.media_type,
+          release_date: item.releaseDate || item.release_date || item.first_air_date || "",
+          vote_average: item.rating ?? item.vote_average ?? 0,
+          media_type: item.mediaType || item.type || item.media_type,
+          badge: (item.mediaType || item.type || item.media_type) === "tv" ? "New series" : "Coming soon",
           read: false,
         })),
       );
@@ -489,16 +620,18 @@ export default function Home() {
         })),
       );
       if (feedMatches.length) setMatches(feedMatches);
-      setNotifications((current) => [...fresh, ...current]);
-      if (!fresh.length) {
-        setMatches(SAMPLE_TITLES);
-        setNotifications((current) => [...makeDemoNotifications(), ...current]);
-        setApiError("No new TMDB matches in your date window. Added sample alerts so you can test the notification workflow.");
+      const freshCount = countNewNotifications(notifications, incoming);
+      setNotifications((current) => deduplicateNotifications([...incoming, ...current], radars));
+      if (freshCount === 0) {
+        setStatusMessage("All caught up — no new matches found.");
       }
     } catch (error) {
       console.error("Could not check for new matches:", error);
       setMatches(SAMPLE_TITLES);
-      setNotifications((current) => [...makeDemoNotifications(), ...current]);
+      const demoNotifications = makeDemoNotifications();
+      const freshCount = countNewNotifications(notifications, demoNotifications);
+      setNotifications((current) => deduplicateNotifications([...demoNotifications, ...current], radars));
+      if (freshCount === 0) setStatusMessage("All caught up — no new matches found.");
       setApiError(
         `${error instanceof Error ? error.message : "TMDB is unavailable."} Sample alerts were added so you can still test notifications.`,
       );
@@ -560,6 +693,7 @@ export default function Home() {
             <button onClick={() => setApiError("")} aria-label="Dismiss message"><FaXmark /></button>
           </div>
         )}
+        {statusMessage && <div className="caught-up-notice" role="status">{statusMessage}</div>}
 
         {activeTab !== "notifications" && (
           <section className="spotlight" style={spotlightStyle}>
@@ -596,6 +730,7 @@ export default function Home() {
               </div>
               <div className="notification-bulk-actions">
                 <button className="secondary-button" onClick={markAllRead} disabled={!unreadCount}><FaCheck /> Mark all as read</button>
+                  <button className="clear-all-button" onClick={clearNotifications} disabled={!notifications.length}><FaTrash /> Clear all</button>
                 <button className="primary-button" onClick={checkForMatches} disabled={isChecking || !radars.length}>
                   <FaArrowRotateRight className={isChecking ? "spin" : ""} /> {isChecking ? "Checking…" : "Check for New Matches"}
                 </button>
