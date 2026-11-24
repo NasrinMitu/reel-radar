@@ -180,6 +180,17 @@ button:disabled { cursor: not-allowed; opacity: .58; }
   padding: 45px 44px 39px;
   position: relative;
 }
+.spotlight-loading { background-image: linear-gradient(110deg, #10131b 8%, #1a1e29 18%, #10131b 33%); background-size: 220% 100%; animation: skeleton-shimmer 1.5s linear infinite; }
+.skeleton-line, .poster-skeleton { animation: skeleton-shimmer 1.5s linear infinite; background: linear-gradient(110deg, rgba(255,255,255,.055) 8%, rgba(255,255,255,.12) 18%, rgba(255,255,255,.055) 33%); background-size: 220% 100%; border-radius: 7px; display: block; }
+.spotlight-loading .spotlight-content { display: flex; flex-direction: column; gap: 15px; max-width: 470px; }
+.skeleton-eyebrow { height: 12px; width: 155px; }
+.skeleton-title { height: 42px; margin-top: 12px; width: min(390px, 85%); }
+.skeleton-meta { height: 25px; width: 225px; }
+.skeleton-copy { height: 13px; width: min(420px, 92%); }
+.skeleton-copy.short { width: min(290px, 70%); }
+.skeleton-action { border-radius: 8px; height: 39px; margin-top: 10px; width: 150px; }
+.spotlight-empty .spotlight-content { max-width: 480px; }
+@keyframes skeleton-shimmer { to { background-position-x: -220%; } }
 .spotlight::after {
   background:
     radial-gradient(ellipse at 86% 30%, rgba(225,29,72,.11), transparent 38%),
@@ -326,6 +337,10 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .text-link:hover { color: #ff9aab; }
 .text-link svg { font-size: 9px; }
 .title-grid { display: grid; gap: 17px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.poster-skeleton-card { min-width: 0; }
+.poster-skeleton { aspect-ratio: 2 / 3; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }
+.poster-skeleton-card .skeleton-line { height: 12px; margin-top: 10px; width: 76%; }
+.poster-skeleton-card .skeleton-line.short { margin-top: 8px; width: 48%; }
 .title-card { cursor: pointer; min-width: 0; }
 .poster {
   aspect-ratio: 2 / 3;

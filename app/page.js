@@ -40,7 +40,7 @@ const GENRES = [
   { id: 10768, name: "War & Politics" },
 ];
 
-const INITIAL_RADARS = [
+const DEFAULT_RADARS = [
   {
     id: "radar-romcom",
     name: "Cozy Rom-Coms",
@@ -73,6 +73,17 @@ const INITIAL_RADARS = [
     minRating: 7.5,
     alerts: ["On Release Day"],
     color: "#93b49a",
+  },
+  {
+    id: "radar-epic-adventures",
+    name: "Epic Adventures",
+    format: "both",
+    genres: [12],
+    excludedGenres: [],
+    tags: [],
+    minRating: 7,
+    alerts: ["On Release Day", "Trailer Drop"],
+    color: "#d9a85d",
   },
 ];
 
@@ -189,6 +200,15 @@ function filterOutOldNotifications(items) {
     const releaseDate = item.releaseDate || item.release_date;
     return !releaseDate || releaseDate >= OLDEST_ALLOWED_RELEASE;
   });
+}
+
+function mergeDefaultRadars(savedRadars) {
+  const epicAdventures = DEFAULT_RADARS.find((radar) => radar.id === "radar-epic-adventures");
+  const hasEpicAdventures = savedRadars.some((radar) =>
+    radar.id === epicAdventures.id ||
+    radar.name?.trim().toLowerCase() === epicAdventures.name.toLowerCase(),
+  );
+  return hasEpicAdventures ? savedRadars : [...savedRadars, epicAdventures];
 }
 
 function metadataCompleteness(item) {
@@ -472,8 +492,8 @@ function InterestModal({ radar, onClose, onSave }) {
 }
 
 export default function Home() {
-  const [radars, setRadars] = useState(INITIAL_RADARS);
-  const [matches, setMatches] = useState(SAMPLE_TITLES);
+  const [radars, setRadars] = useState(DEFAULT_RADARS);
+  const [matches, setMatches] = useState([]);
   const [previewItem, setPreviewItem] = useState(null);
   const [trailerKey, setTrailerKey] = useState(null);
   const [isTrailerLoading, setIsTrailerLoading] = useState(false);
@@ -487,20 +507,25 @@ export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [apiError, setApiError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [search, setSearch] = useState("");
   const [radarsLoaded, setRadarsLoaded] = useState(false);
   const feedRef = useRef(null);
   const autoPlayTrailerRef = useRef(false);
+  const initialFetchStartedRef = useRef(false);
+  const checkForMatchesRef = useRef(null);
 
   useEffect(() => {
     try {
       const savedRadars = window.localStorage.getItem("reel-radar-radars");
       const savedNotifications = window.localStorage.getItem("reel-radar-notifications");
       const parsedRadars = savedRadars ? JSON.parse(savedRadars) : null;
-      const loadedRadars = Array.isArray(parsedRadars) ? parsedRadars : INITIAL_RADARS;
-      if (Array.isArray(parsedRadars)) setRadars(parsedRadars);
+      const loadedRadars = Array.isArray(parsedRadars)
+        ? mergeDefaultRadars(parsedRadars)
+        : DEFAULT_RADARS;
+      setRadars(loadedRadars);
       if (savedNotifications) {
         const parsedNotifications = JSON.parse(savedNotifications);
         if (Array.isArray(parsedNotifications)) {
@@ -582,6 +607,14 @@ export default function Home() {
       : matches.slice(0, MAX_FEED_RESULTS),
     [currentRadarFilter, matches],
   );
+  const spotlightMatch = useMemo(() => {
+    const artworkMatches = matches.filter((item) => item.backdropUrl || item.posterUrl || item.backdrop || item.poster);
+    const selectedRadarMatches = currentRadarFilter
+      ? artworkMatches.filter((item) => item.radarId === currentRadarFilter.id || item.radar === currentRadarFilter.name)
+      : artworkMatches;
+    return [...(selectedRadarMatches.length ? selectedRadarMatches : artworkMatches)]
+      .sort((a, b) => Number(b.vote_average || 0) - Number(a.vote_average || 0))[0] || null;
+  }, [currentRadarFilter, matches]);
   const filteredNotifications = useMemo(() => {
     if (notificationFilter === "unread") return notifications.filter((item) => !item.read);
     if (notificationFilter.startsWith("radar:")) {
@@ -665,9 +698,10 @@ export default function Home() {
     });
   }
 
-  async function checkForMatches() {
+  async function checkForMatches({ initialLoad = false } = {}) {
     if (!radars.length || isChecking) return;
     setIsChecking(true);
+    if (initialLoad) setIsInitialLoading(true);
     setApiError("");
     setStatusMessage("");
     try {
@@ -717,16 +751,22 @@ export default function Home() {
           release_date: item.release_date,
           vote_average: item.vote_average || 0,
           media_type: item.media_type,
-          posterUrl: item.posterUrl || "",
-          poster: item.posterUrl || "",
+          posterUrl: item.posterUrl || (item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : ""),
+          poster: item.posterUrl || (item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : ""),
+          backdropUrl: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : "",
           backdrop: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : "",
           overview: item.overview || "",
           genre_ids: item.genre_ids || [],
           badge: getReleaseBadge(item.release_date || item.first_air_date),
           radar: radar.name,
-        })),
+        })).filter((item) => item.posterUrl),
       );
-      if (feedMatches.length) setMatches(feedMatches);
+      setMatches(feedMatches);
+      if (initialLoad && responses.length) {
+        const mostMatchesRadar = [...responses]
+          .sort((a, b) => b.results.length - a.results.length)[0]?.radar;
+        if (mostMatchesRadar) setActiveRadarFilter(mostMatchesRadar.id);
+      }
       const freshCount = countNewNotifications(notifications, incoming);
       setNotifications((current) => deduplicateNotifications([...incoming, ...current], radars));
       if (freshCount === 0) {
@@ -734,18 +774,30 @@ export default function Home() {
       }
     } catch (error) {
       console.error("Could not check for new matches:", error);
-      setMatches(SAMPLE_TITLES);
-      const demoNotifications = makeDemoNotifications();
-      const freshCount = countNewNotifications(notifications, demoNotifications);
-      setNotifications((current) => deduplicateNotifications([...demoNotifications, ...current], radars));
-      if (freshCount === 0) setStatusMessage("All caught up — no new matches found.");
-      setApiError(
-        `${error instanceof Error ? error.message : "TMDB is unavailable."} Sample alerts were added so you can still test notifications.`,
+      if (!initialLoad) {
+        setMatches(SAMPLE_TITLES);
+        const demoNotifications = makeDemoNotifications();
+        const freshCount = countNewNotifications(notifications, demoNotifications);
+        setNotifications((current) => deduplicateNotifications([...demoNotifications, ...current], radars));
+        if (freshCount === 0) setStatusMessage("All caught up — no new matches found.");
+      }
+      setApiError(initialLoad
+        ? `${error instanceof Error ? error.message : "TMDB is unavailable."} Live matches could not be loaded.`
+        : `${error instanceof Error ? error.message : "TMDB is unavailable."} Sample alerts were added so you can still test notifications.`,
       );
     } finally {
       setIsChecking(false);
+      if (initialLoad) setIsInitialLoading(false);
     }
   }
+
+  checkForMatchesRef.current = checkForMatches;
+
+  useEffect(() => {
+    if (!radarsLoaded || initialFetchStartedRef.current) return;
+    initialFetchStartedRef.current = true;
+    checkForMatchesRef.current?.({ initialLoad: true });
+  }, [radarsLoaded]);
 
   const openNotifications = () => {
     setIsDrawerOpen(true);
@@ -756,8 +808,7 @@ export default function Home() {
     { label: "Discover Feed", value: "Discover Feed" },
     { label: "Notifications", value: "notifications" },
   ];
-  const spotlightMatch = matches[0] || SAMPLE_TITLES[0];
-  const spotlightImage = spotlightMatch.backdrop || spotlightMatch.poster;
+  const spotlightImage = spotlightMatch?.backdropUrl || spotlightMatch?.backdrop || spotlightMatch?.posterUrl || spotlightMatch?.poster;
   const spotlightStyle = spotlightImage
     ? { backgroundImage: `linear-gradient(90deg, #0b0d12 0%, rgba(11,13,18,.94) 27%, rgba(11,13,18,.62) 57%, rgba(11,13,18,.2) 100%), linear-gradient(0deg, #0b0d12 0%, transparent 42%), url("${spotlightImage}")` }
     : undefined;
@@ -803,28 +854,55 @@ export default function Home() {
         {statusMessage && <div className="caught-up-notice" role="status">{statusMessage}</div>}
 
         {activeTab !== "notifications" && (
-          <section className="spotlight" style={spotlightStyle}>
-            <div className="spotlight-content">
-              <p className="eyebrow"><span className="eyebrow-dot" /> {activeTab === "Discover Feed" ? "PICKED FOR YOUR RADARS" : "YOUR NEXT GREAT WATCH"}</p>
-              <span className="match-score"><FaWandMagicSparkles /> 96% Radar Match</span>
-              <h1>{spotlightMatch.title}</h1>
-              <div className="spotlight-meta">
-                <span className="spotlight-date"><FaCalendar /> {formatDate(spotlightMatch.release_date)}</span>
-                <span className="spotlight-rating"><FaStar /> {Number(spotlightMatch.vote_average).toFixed(1)}</span>
-                <span className="spotlight-type">{mediaLabel(spotlightMatch.media_type)}</span>
+          isInitialLoading ? (
+            <section className="spotlight spotlight-loading" aria-label="Loading live matches" aria-busy="true">
+              <div className="spotlight-content">
+                <span className="skeleton-line skeleton-eyebrow" />
+                <span className="skeleton-line skeleton-title" />
+                <span className="skeleton-line skeleton-meta" />
+                <span className="skeleton-line skeleton-copy" />
+                <span className="skeleton-line skeleton-copy short" />
+                <span className="skeleton-line skeleton-action" />
               </div>
-              <p className="spotlight-synopsis">{spotlightMatch.overview || "A new story is finding its way to your watchlist. Your radars are keeping an eye on it."}</p>
-              <div className="spotlight-actions">
-                <span className="hero-alert"><FaCheck /> Alert Active</span>
-                <button className="preview-button" onClick={() => openPreview(spotlightMatch)}><FaCirclePlay /> Preview Details</button>
+              <div className="hero-stats">
+                <div className="hero-stat"><span className="stat-icon"><FaSliders /></span><b>{radars.length}</b><small>Active Radars</small></div>
+                <div className="hero-stat"><span className="stat-icon"><FaRegClock /></span><b>—</b><small>Coming Soon</small></div>
+                <div className="hero-stat"><span className="stat-icon"><FaBell /></span><b>{unreadCount}</b><small>Unread Alerts</small></div>
               </div>
-            </div>
-            <div className="hero-stats">
-              <div className="hero-stat"><span className="stat-icon"><FaSliders /></span><b>{radars.length}</b><small>Active Radars</small></div>
-              <div className="hero-stat"><span className="stat-icon"><FaRegClock /></span><b>{matches.length}</b><small>Coming Soon</small></div>
-              <div className="hero-stat"><span className="stat-icon"><FaBell /></span><b>{unreadCount}</b><small>Unread Alerts</small></div>
-            </div>
-          </section>
+            </section>
+          ) : spotlightMatch ? (
+            <section className="spotlight" style={spotlightStyle}>
+              <div className="spotlight-content">
+                <p className="eyebrow"><span className="eyebrow-dot" /> {activeTab === "Discover Feed" ? "PICKED FOR YOUR RADARS" : "YOUR NEXT GREAT WATCH"}</p>
+                <span className="match-score"><FaWandMagicSparkles /> 96% Radar Match</span>
+                <h1>{spotlightMatch.title}</h1>
+                <div className="spotlight-meta">
+                  <span className="spotlight-date"><FaCalendar /> {formatDate(spotlightMatch.release_date)}</span>
+                  <span className="spotlight-rating"><FaStar /> {Number(spotlightMatch.vote_average).toFixed(1)}</span>
+                  <span className="spotlight-type">{mediaLabel(spotlightMatch.media_type)}</span>
+                </div>
+                <p className="spotlight-synopsis">{spotlightMatch.overview || "A new story is finding its way to your watchlist. Your radars are keeping an eye on it."}</p>
+                <div className="spotlight-actions">
+                  <span className="hero-alert"><FaCheck /> Alert Active</span>
+                  <button className="preview-button" onClick={() => openPreview(spotlightMatch)}><FaCirclePlay /> Preview Details</button>
+                </div>
+              </div>
+              <div className="hero-stats">
+                <div className="hero-stat"><span className="stat-icon"><FaSliders /></span><b>{radars.length}</b><small>Active Radars</small></div>
+                <div className="hero-stat"><span className="stat-icon"><FaRegClock /></span><b>{matches.length}</b><small>Coming Soon</small></div>
+                <div className="hero-stat"><span className="stat-icon"><FaBell /></span><b>{unreadCount}</b><small>Unread Alerts</small></div>
+              </div>
+            </section>
+          ) : (
+            <section className="spotlight spotlight-empty">
+              <div className="spotlight-content">
+                <p className="eyebrow"><span className="eyebrow-dot" /> YOUR NEXT GREAT WATCH</p>
+                <h1>No live matches just yet</h1>
+                <p className="spotlight-synopsis">We couldn’t find artwork-backed releases for your radars right now. Check again soon.</p>
+                <button className="preview-button" onClick={() => checkForMatches()} disabled={isChecking}><FaArrowRotateRight className={isChecking ? "spin" : ""} /> Try again</button>
+              </div>
+            </section>
+          )
         )}
 
         {activeTab === "notifications" ? (
@@ -950,7 +1028,13 @@ export default function Home() {
                 </div>
               )}
               <div className="title-grid">
-                {filteredMatches.length ? filteredMatches.map((item, index) => (
+                {isInitialLoading ? Array.from({ length: 8 }, (_, index) => (
+                  <div className="poster-skeleton-card" key={`poster-skeleton-${index}`} aria-hidden="true">
+                    <div className="poster-skeleton" />
+                    <span className="skeleton-line" />
+                    <span className="skeleton-line short" />
+                  </div>
+                )) : filteredMatches.length ? filteredMatches.map((item, index) => (
                   <TitleCard
                     item={item}
                     index={index}
