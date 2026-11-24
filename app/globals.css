@@ -337,8 +337,15 @@ button:disabled { cursor: not-allowed; opacity: .58; }
   position: relative;
 }
 .poster::after { background: linear-gradient(180deg, rgba(0,0,0,.28), transparent 26%, rgba(0,0,0,.12) 48%, rgba(0,0,0,.95) 100%); content: ""; inset: 0; pointer-events: none; position: absolute; z-index: 0; }
-.poster-image { background-color: #20232f; background-position: center; background-size: cover; height: 100%; inset: 0; position: absolute; transition: transform .3s ease; width: 100%; z-index: 0; }
+.poster-image { background-color: #20232f; background-position: center; background-size: cover; height: 100%; inset: 0; object-fit: cover; position: absolute; transition: transform .3s ease; width: 100%; z-index: 0; }
 .title-card:hover .poster-image { transform: scale(1.05); }
+.poster-fallback { align-items: center; background: radial-gradient(ellipse at 50% 24%, #493044, #24202b 58%, #141720); color: #f5eaf0; display: flex; flex-direction: column; inset: 0; justify-content: center; padding: 18px; position: absolute; text-align: center; }
+.poster.art-1 .poster-fallback { background: radial-gradient(ellipse at 48% 24%, #39345d, #242333 60%, #171a24); }
+.poster.art-2 .poster-fallback { background: radial-gradient(ellipse at 55% 24%, #31483e, #202d2f 60%, #171a24); }
+.poster.art-3 .poster-fallback { background: radial-gradient(ellipse at 50% 24%, #583c31, #30242a 58%, #171a24); }
+.poster-fallback-icon { align-items: center; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15); border-radius: 50%; color: #ffd1dc; display: flex; font-size: 22px; height: 56px; justify-content: center; margin-bottom: 15px; width: 56px; }
+.poster-fallback strong { color: white; font-size: clamp(17px, 2vw, 23px); font-weight: 750; line-height: 1.15; max-width: 100%; overflow-wrap: anywhere; text-shadow: 0 2px 12px rgba(0,0,0,.35); }
+.poster-fallback-genre { background: rgba(225,29,72,.16); border: 1px solid rgba(255,145,166,.25); border-radius: 999px; color: #ffc0ce; font-size: 11px; font-weight: 650; margin-top: 12px; padding: 5px 9px; }
 .poster-badge, .poster-rating { align-items: center; backdrop-filter: blur(9px); background: rgba(11,13,18,.68); border: 1px solid rgba(255,255,255,.14); border-radius: 5px; color: #f2f3f5; display: inline-flex; font-size: 8px; gap: 5px; padding: 6px 7px; position: absolute; top: 10px; z-index: 2; }
 .poster-badge { left: 9px; }
 .poster-rating { right: 9px; }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import {
   FaArrowRight,
   FaArrowRotateRight,
@@ -130,6 +131,7 @@ const POSTER_BACKDROPS = [
 ];
 
 const ALERT_OPTIONS = ["On Release Day", "New Season", "Trailer Drop"];
+const OLDEST_ALLOWED_RELEASE = "2026-01-01";
 
 function getAlertKey(item) {
   const radarId = item.radarId || item.radar || "unknown-radar";
@@ -178,6 +180,13 @@ function normalizeNotification(item, radars) {
   normalized.poster = normalized.posterUrl;
   normalized.id = getAlertKey(normalized);
   return normalized;
+}
+
+function filterOutOldNotifications(items) {
+  return items.filter((item) => {
+    const releaseDate = item.releaseDate || item.release_date;
+    return !releaseDate || releaseDate >= OLDEST_ALLOWED_RELEASE;
+  });
 }
 
 function metadataCompleteness(item) {
@@ -244,6 +253,26 @@ function mediaLabel(format) {
   if (format === "movie") return "Movie";
   if (format === "tv") return "TV Series";
   return "Movies & TV";
+}
+
+function getGenreLabel(item) {
+  const genreIds = item.genre_ids || item.genres || [];
+  const genreId = genreIds[0];
+  const tvGenreNames = {
+    10759: "Action & Adventure",
+    10765: "Sci-Fi & Fantasy",
+    10768: "War & Politics",
+  };
+  return GENRES.find((genre) => genre.id === genreId)?.name || tvGenreNames[genreId] || "Genre match";
+}
+
+function getReleaseBadge(releaseDate) {
+  if (!releaseDate) return "Release date TBA";
+  const today = new Date().toISOString().slice(0, 10);
+  if (releaseDate > today) return "Upcoming";
+  const ninetyDaysAgo = new Date(`${today}T00:00:00.000Z`);
+  ninetyDaysAgo.setUTCDate(ninetyDaysAgo.getUTCDate() - 90);
+  return releaseDate >= ninetyDaysAgo.toISOString().slice(0, 10) ? "New Release" : "Released";
 }
 
 function posterStyle(item, index) {
@@ -453,7 +482,9 @@ export default function Home() {
       if (savedNotifications) {
         const parsedNotifications = JSON.parse(savedNotifications);
         if (Array.isArray(parsedNotifications)) {
-          setNotifications(deduplicateNotifications(parsedNotifications, loadedRadars));
+          setNotifications(
+            filterOutOldNotifications(deduplicateNotifications(parsedNotifications, loadedRadars)),
+          );
         }
       }
     } catch (error) {
@@ -612,10 +643,12 @@ export default function Home() {
           release_date: item.release_date,
           vote_average: item.vote_average || 0,
           media_type: item.media_type,
-          poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
+          posterUrl: item.posterUrl || "",
+          poster: item.posterUrl || "",
           backdrop: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : "",
           overview: item.overview || "",
-          badge: item.media_type === "tv" ? "New series" : "Coming soon",
+          genre_ids: item.genre_ids || [],
+          badge: getReleaseBadge(item.release_date || item.first_air_date),
           radar: radar.name,
         })),
       );
@@ -909,14 +942,37 @@ export default function Home() {
 }
 
 function TitleCard({ item, index }) {
+  const posterUrl = item.posterUrl || item.poster || "";
+  const [posterFailed, setPosterFailed] = useState(false);
+
+  useEffect(() => {
+    setPosterFailed(false);
+  }, [posterUrl]);
+
   return (
     <article className="title-card">
       <div className={`poster art-${index % 4}`}>
-        <div className="poster-image" style={posterStyle(item, index)} />
-        <span className="poster-badge"><FaRegClock /> {item.badge}</span>
+        {posterUrl && !posterFailed ? (
+          <Image
+            className="poster-image"
+            src={posterUrl}
+            alt=""
+            fill
+            sizes="(max-width: 700px) 50vw, 220px"
+            unoptimized
+            onError={() => setPosterFailed(true)}
+          />
+        ) : (
+          <div className="poster-fallback">
+            <span className="poster-fallback-icon">{item.media_type === "movie" ? <FaFilm /> : <FaTv />}</span>
+            <strong>{item.title}</strong>
+            <span className="poster-fallback-genre">{getGenreLabel(item)}</span>
+          </div>
+        )}
+        <span className="poster-badge"><FaRegClock /> {getReleaseBadge(item.release_date)}</span>
         <span className="poster-rating"><FaStar /> {item.vote_average.toFixed(1)}</span>
         <div className="poster-overlay">
-          <span className="poster-title">{item.title}</span>
+          {!posterFailed && posterUrl && <span className="poster-title">{item.title}</span>}
           <span className="poster-date">{formatDate(item.release_date)}</span>
           <span className="poster-radar">{item.radar}</span>
         </div>
