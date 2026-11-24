@@ -22,6 +22,11 @@ import {
   FaWandMagicSparkles,
   FaXmark,
 } from "react-icons/fa6";
+import {
+  getSupabaseAccessToken,
+  isSupabaseConfigured,
+  supabaseApiRequest,
+} from "../lib/supabase";
 
 const GENRES = [
   { id: 28, name: "Action" },
@@ -209,6 +214,89 @@ function mergeDefaultRadars(savedRadars) {
     radar.name?.trim().toLowerCase() === epicAdventures.name.toLowerCase(),
   );
   return hasEpicAdventures ? savedRadars : [...savedRadars, epicAdventures];
+}
+
+function radarFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    format: row.format,
+    genres: row.genres || [],
+    excludedGenres: row.excluded_genres || [],
+    tags: row.tags || [],
+    alerts: row.alerts || [],
+    color: row.color || "#e11d48",
+    minRating: Number(row.min_rating) || 0,
+    isActive: row.is_active !== false,
+  };
+}
+
+function notificationFromRow(row, radars) {
+  const radar = radars.find((item) => item.id === row.radar_id);
+  return normalizeNotification({
+    dbId: row.id,
+    radarId: row.radar_id,
+    radar: radar?.name || row.radar_id,
+    tmdbId: row.tmdb_id,
+    mediaType: row.media_type,
+    title: row.title,
+    releaseDate: row.release_date || "",
+    rating: Number(row.rating) || 0,
+    posterUrl: row.poster_url || "",
+    overview: row.overview || "",
+    read: Boolean(row.is_read),
+    createdAt: row.created_at,
+  }, radars);
+}
+
+function feedMatchFromResult(radar, item) {
+  const releaseDate = item.releaseDate || item.release_date || item.first_air_date || "";
+  const posterUrl = item.posterUrl || (item.poster_path
+    ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+    : "");
+  const backdropUrl = item.backdropUrl || (item.backdrop_path
+    ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}`
+    : "");
+  return {
+    id: `${item.media_type || item.mediaType || item.type}-${item.id}-${radar.id}`,
+    radarId: radar.id,
+    tmdbId: String(item.id),
+    title: item.title || item.name,
+    release_date: releaseDate,
+    vote_average: item.vote_average ?? item.rating ?? 0,
+    media_type: item.media_type || item.mediaType || item.type,
+    posterUrl,
+    poster: posterUrl,
+    backdropUrl,
+    backdrop: backdropUrl,
+    overview: item.overview || "",
+    genre_ids: item.genre_ids || item.genres || [],
+    badge: getReleaseBadge(releaseDate),
+    radar: radar.name,
+  };
+}
+
+function notificationFromResult(radar, item) {
+  const releaseDate = item.releaseDate || item.release_date || item.first_air_date || "";
+  const posterUrl = item.posterUrl || (item.poster_path
+    ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+    : "");
+  return normalizeNotification({
+    radarId: radar.id,
+    tmdbId: String(item.tmdbId || item.id),
+    mediaType: item.mediaType || item.type || item.media_type,
+    title: item.title || item.name,
+    message: "A new match just landed on your radar",
+    radar: radar.name,
+    createdAt: new Date().toISOString(),
+    posterUrl,
+    poster: posterUrl,
+    releaseDate,
+    rating: item.rating ?? item.vote_average ?? 0,
+    overview: item.overview || "",
+    badge: getReleaseBadge(releaseDate),
+    read: false,
+  }, [radar]);
 }
 
 function metadataCompleteness(item) {
@@ -509,36 +597,94 @@ export default function Home() {
   const [isChecking, setIsChecking] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [apiError, setApiError] = useState("");
+  const [persistenceWarning, setPersistenceWarning] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [search, setSearch] = useState("");
   const [radarsLoaded, setRadarsLoaded] = useState(false);
+  const [persistenceMode, setPersistenceMode] = useState("local");
   const feedRef = useRef(null);
   const autoPlayTrailerRef = useRef(false);
   const initialFetchStartedRef = useRef(false);
   const checkForMatchesRef = useRef(null);
 
   useEffect(() => {
+    let cancelled = false;
+    let loadedRadars = DEFAULT_RADARS;
+    let localNotifications = [];
+
     try {
       const savedRadars = window.localStorage.getItem("reel-radar-radars");
       const savedNotifications = window.localStorage.getItem("reel-radar-notifications");
       const parsedRadars = savedRadars ? JSON.parse(savedRadars) : null;
-      const loadedRadars = Array.isArray(parsedRadars)
+      loadedRadars = Array.isArray(parsedRadars)
         ? mergeDefaultRadars(parsedRadars)
         : DEFAULT_RADARS;
       setRadars(loadedRadars);
       if (savedNotifications) {
         const parsedNotifications = JSON.parse(savedNotifications);
         if (Array.isArray(parsedNotifications)) {
-          setNotifications(
-            filterOutOldNotifications(deduplicateNotifications(parsedNotifications, loadedRadars)),
+          localNotifications = filterOutOldNotifications(
+            deduplicateNotifications(parsedNotifications, loadedRadars),
           );
+          setNotifications(localNotifications);
         }
       }
     } catch (error) {
       console.error("Could not load saved Reel Radar data:", error);
-    } finally {
-      setRadarsLoaded(true);
     }
+
+    async function hydrateSupabase() {
+      if (!isSupabaseConfigured) {
+        setPersistenceMode("local");
+        setRadarsLoaded(true);
+        return;
+      }
+
+      try {
+        await getSupabaseAccessToken();
+        const [radarData, notificationData] = await Promise.all([
+          supabaseApiRequest("/api/radars"),
+          supabaseApiRequest("/api/notifications"),
+        ]);
+        if (cancelled) return;
+
+        const storedRadars = (radarData.radars || []).map(radarFromRow);
+        const hydratedRadars = mergeDefaultRadars(storedRadars.length ? storedRadars : loadedRadars);
+        const remoteNotifications = (notificationData.notifications || [])
+          .map((item) => notificationFromRow(item, hydratedRadars))
+          .filter(Boolean);
+        const hydratedNotifications = remoteNotifications.length
+          ? remoteNotifications
+          : localNotifications;
+
+        setRadars(hydratedRadars);
+        setNotifications(filterOutOldNotifications(
+          deduplicateNotifications(hydratedNotifications, hydratedRadars),
+        ));
+        setPersistenceMode("supabase");
+
+        const knownRadarIds = new Set(storedRadars.map((radar) => radar.id));
+        await Promise.all(hydratedRadars
+          .filter((radar) => !knownRadarIds.has(radar.id))
+          .map((radar) => supabaseApiRequest("/api/radars", {
+            method: "POST",
+            body: JSON.stringify(radar),
+          })));
+      } catch (error) {
+        console.error("Supabase persistence is unavailable; using local storage:", error);
+        if (!cancelled) {
+          setPersistenceMode("local");
+          setPersistenceWarning(`Supabase persistence is unavailable; changes are saved in this browser only. ${error instanceof Error ? error.message : ""}`.trim());
+        }
+      } finally {
+        if (!cancelled) setRadarsLoaded(true);
+      }
+    }
+
+    hydrateSupabase();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -630,29 +776,59 @@ export default function Home() {
     }
   }, [activeRadarFilter, activeTab]);
 
+  async function persistSupabase(path, options) {
+    if (persistenceMode !== "supabase") return;
+    try {
+      await supabaseApiRequest(path, options);
+    } catch (error) {
+      console.error("Supabase update failed; continuing with local storage:", error);
+      setPersistenceMode("local");
+      setPersistenceWarning(`Could not sync with Supabase; future changes are saved in this browser only. ${error instanceof Error ? error.message : ""}`.trim());
+    }
+  }
+
   function saveRadar(radar) {
+    const savedRadar = { ...radar, isActive: radar.isActive !== false };
     setRadars((current) => editingRadar
-      ? current.map((item) => item.id === radar.id ? radar : item)
-      : [radar, ...current]);
+      ? current.map((item) => item.id === savedRadar.id ? savedRadar : item)
+      : [savedRadar, ...current]);
+    void persistSupabase("/api/radars", {
+      method: "POST",
+      body: JSON.stringify(savedRadar),
+    });
     setEditingRadar(null);
     setIsModalOpen(false);
   }
 
   function removeRadar(id) {
     setRadars((current) => current.filter((radar) => radar.id !== id));
+    setNotifications((current) => current.filter((item) => item.radarId !== id));
+    void persistSupabase(`/api/radars?id=${encodeURIComponent(id)}`, { method: "DELETE" });
     if (activeRadarFilter === id) setActiveRadarFilter(null);
   }
 
   function markAllRead() {
     setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+    void persistSupabase("/api/notifications", {
+      method: "PATCH",
+      body: JSON.stringify({ markAll: true }),
+    });
   }
 
   function clearNotifications() {
     setNotifications([]);
+    void persistSupabase("/api/notifications", { method: "DELETE" });
   }
 
   function markNotificationRead(id) {
+    const notification = notifications.find((item) => item.id === id);
     setNotifications((current) => current.map((item) => item.id === id ? { ...item, read: true } : item));
+    if (notification?.dbId) {
+      void persistSupabase("/api/notifications", {
+        method: "PATCH",
+        body: JSON.stringify({ ids: [notification.dbId] }),
+      });
+    }
   }
 
   function selectRadar(radar) {
@@ -671,33 +847,6 @@ export default function Home() {
     setPreviewItem(null);
   }
 
-  function makeDemoNotifications() {
-    const now = Date.now();
-    return radars.slice(0, 3).map((radar, index) => {
-      const title = SAMPLE_TITLES[index % SAMPLE_TITLES.length];
-      return {
-        id: `demo-${now}-${index}`,
-        radarId: radar.id,
-        tmdbId: String(title.id),
-        mediaType: title.media_type,
-        title: title.title,
-        message: index === 1 ? "A new season is on the way" : "A fresh match just landed on your radar",
-        radar: radar.name,
-        createdAt: new Date(now - index * 60000).toISOString(),
-        poster: title.poster,
-        posterUrl: title.poster || "",
-        releaseDate: title.release_date,
-        rating: title.vote_average,
-        overview: title.overview,
-        release_date: title.release_date,
-        vote_average: title.vote_average,
-        media_type: title.media_type,
-        badge: title.badge,
-        read: false,
-      };
-    });
-  }
-
   async function checkForMatches({ initialLoad = false } = {}) {
     if (!radars.length || isChecking) return;
     setIsChecking(true);
@@ -705,8 +854,8 @@ export default function Home() {
     setApiError("");
     setStatusMessage("");
     try {
-      const responses = await Promise.all(
-        radars.map(async (radar) => {
+      async function fetchDirectMatches() {
+        return Promise.all(radars.filter((radar) => radar.isActive !== false).map(async (radar) => {
           const query = new URLSearchParams({
             format: radar.format,
             genres: radar.genres.join(","),
@@ -718,48 +867,39 @@ export default function Home() {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || "Could not check TMDB for new matches.");
           return { radar, results: data.results || [] };
-        }),
-      );
-      const incoming = responses.flatMap(({ radar, results }) =>
-        results.slice(0, MAX_RESULTS_PER_RADAR).map((item) => ({
-          radarId: radar.id,
-          tmdbId: String(item.tmdbId || item.id),
-          mediaType: item.mediaType || item.type || item.media_type,
-          title: item.title || item.name,
-          message: "A new match just landed on your radar",
-          radar: radar.name,
-          createdAt: new Date().toISOString(),
-          posterUrl: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-          poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-          releaseDate: item.releaseDate || item.release_date || item.first_air_date || "",
-          rating: item.rating ?? item.vote_average ?? 0,
-          overview: item.overview || "",
-          type: item.type || item.mediaType || item.media_type,
-          release_date: item.releaseDate || item.release_date || item.first_air_date || "",
-          vote_average: item.rating ?? item.vote_average ?? 0,
-          media_type: item.mediaType || item.type || item.media_type,
-          badge: getReleaseBadge(item.releaseDate || item.release_date || item.first_air_date),
-          read: false,
-        })),
-      );
+        }));
+      }
+
+      let data;
+      if (persistenceMode === "supabase") {
+        try {
+          data = await supabaseApiRequest("/api/radar-check", {
+            method: "POST",
+            body: JSON.stringify({ radars }),
+          });
+        } catch (error) {
+          console.error("Supabase radar check failed; checking with local storage fallback:", error);
+          setPersistenceMode("local");
+          setPersistenceWarning(`Supabase radar check failed; matches are being checked locally. ${error instanceof Error ? error.message : ""}`.trim());
+          data = { mode: "local", matches: await fetchDirectMatches() };
+        }
+      } else if (isSupabaseConfigured) {
+        data = { mode: "local", matches: await fetchDirectMatches() };
+      } else {
+        const response = await fetch("/api/radar-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ radars }),
+        });
+        data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not run the radar check.");
+      }
+
+      const responses = data.matches || [];
       const feedMatches = responses.flatMap(({ radar, results }) =>
-        results.slice(0, MAX_RESULTS_PER_RADAR).map((item) => ({
-          id: `${item.media_type}-${item.id}-${radar.id}`,
-          radarId: radar.id,
-          tmdbId: String(item.id),
-          title: item.title || item.name,
-          release_date: item.release_date,
-          vote_average: item.vote_average || 0,
-          media_type: item.media_type,
-          posterUrl: item.posterUrl || (item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : ""),
-          poster: item.posterUrl || (item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : ""),
-          backdropUrl: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : "",
-          backdrop: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : "",
-          overview: item.overview || "",
-          genre_ids: item.genre_ids || [],
-          badge: getReleaseBadge(item.release_date || item.first_air_date),
-          radar: radar.name,
-        })).filter((item) => item.posterUrl),
+        results.slice(0, MAX_RESULTS_PER_RADAR)
+          .map((item) => feedMatchFromResult(radar, item))
+          .filter((item) => item.posterUrl),
       );
       setMatches(feedMatches);
       if (initialLoad && responses.length) {
@@ -767,24 +907,28 @@ export default function Home() {
           .sort((a, b) => b.results.length - a.results.length)[0]?.radar;
         if (mostMatchesRadar) setActiveRadarFilter(mostMatchesRadar.id);
       }
-      const freshCount = countNewNotifications(notifications, incoming);
-      setNotifications((current) => deduplicateNotifications([...incoming, ...current], radars));
-      if (freshCount === 0) {
-        setStatusMessage("All caught up — no new matches found.");
+
+      if (data.mode === "supabase") {
+        const incoming = (data.newNotifications || [])
+          .map((item) => normalizeNotification(item, radars))
+          .filter(Boolean);
+        setNotifications((current) => deduplicateNotifications([...incoming, ...current], radars));
+        setStatusMessage(data.queuedCount
+          ? `${data.queuedCount} new match${data.queuedCount === 1 ? "" : "es"} queued for the single digest email.`
+          : "All caught up — no new matches found.");
+      } else {
+        const incoming = responses.flatMap(({ radar, results }) =>
+          results.slice(0, MAX_RESULTS_PER_RADAR).map((item) => notificationFromResult(radar, item)),
+        ).filter(Boolean);
+        const freshCount = countNewNotifications(notifications, incoming);
+        setNotifications((current) => deduplicateNotifications([...incoming, ...current], radars));
+        setStatusMessage(freshCount
+          ? `${freshCount} new match${freshCount === 1 ? "" : "es"} found and saved locally.`
+          : "All caught up — no new matches found.");
       }
     } catch (error) {
       console.error("Could not check for new matches:", error);
-      if (!initialLoad) {
-        setMatches(SAMPLE_TITLES);
-        const demoNotifications = makeDemoNotifications();
-        const freshCount = countNewNotifications(notifications, demoNotifications);
-        setNotifications((current) => deduplicateNotifications([...demoNotifications, ...current], radars));
-        if (freshCount === 0) setStatusMessage("All caught up — no new matches found.");
-      }
-      setApiError(initialLoad
-        ? `${error instanceof Error ? error.message : "TMDB is unavailable."} Live matches could not be loaded.`
-        : `${error instanceof Error ? error.message : "TMDB is unavailable."} Sample alerts were added so you can still test notifications.`,
-      );
+      setApiError(`${error instanceof Error ? error.message : "TMDB is unavailable."} Live matches could not be loaded.`);
     } finally {
       setIsChecking(false);
       if (initialLoad) setIsInitialLoading(false);
@@ -845,10 +989,10 @@ export default function Home() {
       </header>
 
       <div className="page-wrap">
-        {apiError && (
+        {(apiError || persistenceWarning) && (
           <div className="api-notice" role="status">
-            <span>{apiError}</span>
-            <button onClick={() => setApiError("")} aria-label="Dismiss message"><FaXmark /></button>
+            <span>{apiError || persistenceWarning}</span>
+            <button onClick={() => { setApiError(""); setPersistenceWarning(""); }} aria-label="Dismiss message"><FaXmark /></button>
           </div>
         )}
         {statusMessage && <div className="caught-up-notice" role="status">{statusMessage}</div>}
@@ -917,7 +1061,7 @@ export default function Home() {
                 <button className="secondary-button" onClick={markAllRead} disabled={!unreadCount}><FaCheck /> Mark all as read</button>
                   <button className="clear-all-button" onClick={clearNotifications} disabled={!notifications.length}><FaTrash /> Clear all</button>
                 <button className="primary-button" onClick={checkForMatches} disabled={isChecking || !radars.length}>
-                  <FaArrowRotateRight className={isChecking ? "spin" : ""} /> {isChecking ? "Checking…" : "Check for New Matches"}
+                  <FaArrowRotateRight className={isChecking ? "spin" : ""} /> {isChecking ? "Checking…" : "Run Radar Check Now"}
                 </button>
               </div>
             </div>
@@ -1051,7 +1195,7 @@ export default function Home() {
               <div className="check-banner-copy"><p className="eyebrow">DON’T MISS A THING</p><h2>Anything new on your radar?</h2><p>We’ll check your interests and surface anything worth a watch.</p></div>
               <button className="primary-button" disabled={isChecking || !radars.length} onClick={checkForMatches}>
                 {isChecking ? <FaArrowRotateRight className="spin" /> : <FaWandMagicSparkles />}
-                {isChecking ? "Checking your radars…" : "Check for New Matches"}
+                {isChecking ? "Checking your radars…" : "Run Radar Check Now"}
               </button>
             </section>
           </>
