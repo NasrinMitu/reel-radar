@@ -1,5 +1,6 @@
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const MIN_RESULTS = 4;
+const MAX_RESULTS_PER_RADAR = 10;
 const OLDEST_ALLOWED_RELEASE = "2026-01-01";
 const MIN_NEW_TITLE_VOTE_COUNT = 20;
 const TV_GENRE_MAPPINGS = {
@@ -204,7 +205,7 @@ export async function GET(request) {
     );
 
     return Response.json({
-      results: sortResults(results.flat()),
+      results: sortResults(results.flat()).slice(0, MAX_RESULTS_PER_RADAR),
     });
   } catch (error) {
     console.error("TMDB discover request failed:", error);

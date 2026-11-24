@@ -132,6 +132,8 @@ const POSTER_BACKDROPS = [
 
 const ALERT_OPTIONS = ["On Release Day", "New Season", "Trailer Drop"];
 const OLDEST_ALLOWED_RELEASE = "2026-01-01";
+const MAX_RESULTS_PER_RADAR = 10;
+const MAX_FEED_RESULTS = 24;
 
 function getAlertKey(item) {
   const radarId = item.radarId || item.radar || "unknown-radar";
@@ -264,6 +266,21 @@ function getGenreLabel(item) {
     10768: "War & Politics",
   };
   return GENRES.find((genre) => genre.id === genreId)?.name || tvGenreNames[genreId] || "Genre match";
+}
+
+function getGenreNames(item) {
+  const tvGenreNames = {
+    10759: "Action & Adventure",
+    10765: "Sci-Fi & Fantasy",
+    10768: "War & Politics",
+  };
+  return (item.genre_ids || item.genres || [])
+    .map((genre) => {
+      const id = typeof genre === "object" ? genre.id : genre;
+      return GENRES.find((candidate) => candidate.id === id)?.name || tvGenreNames[id];
+    })
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 function getReleaseBadge(releaseDate) {
@@ -458,6 +475,10 @@ export default function Home() {
   const [radars, setRadars] = useState(INITIAL_RADARS);
   const [matches, setMatches] = useState(SAMPLE_TITLES);
   const [previewItem, setPreviewItem] = useState(null);
+  const [trailerKey, setTrailerKey] = useState(null);
+  const [isTrailerLoading, setIsTrailerLoading] = useState(false);
+  const [isTrailerPlaying, setIsTrailerPlaying] = useState(false);
+  const [trailerError, setTrailerError] = useState("");
   const [editingRadar, setEditingRadar] = useState(null);
   const [activeRadarFilter, setActiveRadarFilter] = useState(null);
   const [notificationFilter, setNotificationFilter] = useState("all");
@@ -471,6 +492,7 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [radarsLoaded, setRadarsLoaded] = useState(false);
   const feedRef = useRef(null);
+  const autoPlayTrailerRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -511,6 +533,43 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [statusMessage]);
 
+  useEffect(() => {
+    if (!previewItem) return undefined;
+
+    let cancelled = false;
+    const tmdbId = previewItem.tmdbId || previewItem.id;
+    const mediaType = previewItem.media_type || previewItem.mediaType || "movie";
+    setTrailerKey(null);
+    setIsTrailerPlaying(false);
+    setTrailerError("");
+    if (!/^\d+$/.test(String(tmdbId)) || !["movie", "tv"].includes(mediaType)) {
+      setIsTrailerLoading(false);
+      return undefined;
+    }
+
+    setIsTrailerLoading(true);
+    fetch(`/api/trailer?id=${encodeURIComponent(tmdbId)}&type=${encodeURIComponent(mediaType)}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load trailer details.");
+        if (!cancelled) {
+          setTrailerKey(data.key || null);
+          setIsTrailerPlaying(Boolean(data.key && autoPlayTrailerRef.current));
+        }
+      })
+      .catch((error) => {
+        console.error("Could not load trailer:", error);
+        if (!cancelled) setTrailerError("Trailer details are unavailable right now.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsTrailerLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewItem]);
+
   const unreadCount = notifications.filter((item) => !item.read).length;
   const visibleRadars = useMemo(
     () => radars.filter((radar) => radar.name.toLowerCase().includes(search.toLowerCase())),
@@ -518,7 +577,9 @@ export default function Home() {
   );
   const currentRadarFilter = radars.find((radar) => radar.id === activeRadarFilter) || null;
   const filteredMatches = useMemo(
-    () => currentRadarFilter ? matches.filter((item) => item.radar === currentRadarFilter.name) : matches,
+    () => currentRadarFilter
+      ? matches.filter((item) => item.radar === currentRadarFilter.name)
+      : matches.slice(0, MAX_FEED_RESULTS),
     [currentRadarFilter, matches],
   );
   const filteredNotifications = useMemo(() => {
@@ -564,6 +625,17 @@ export default function Home() {
   function selectRadar(radar) {
     setActiveRadarFilter(radar.id);
     setActiveTab("Discover Feed");
+  }
+
+  function openPreview(item, playTrailer = false) {
+    autoPlayTrailerRef.current = playTrailer;
+    setPreviewItem(item);
+  }
+
+  function closePreview() {
+    autoPlayTrailerRef.current = false;
+    setIsTrailerPlaying(false);
+    setPreviewItem(null);
   }
 
   function makeDemoNotifications() {
@@ -615,7 +687,7 @@ export default function Home() {
         }),
       );
       const incoming = responses.flatMap(({ radar, results }) =>
-        results.slice(0, 2).map((item) => ({
+        results.slice(0, MAX_RESULTS_PER_RADAR).map((item) => ({
           radarId: radar.id,
           tmdbId: String(item.tmdbId || item.id),
           mediaType: item.mediaType || item.type || item.media_type,
@@ -632,13 +704,15 @@ export default function Home() {
           release_date: item.releaseDate || item.release_date || item.first_air_date || "",
           vote_average: item.rating ?? item.vote_average ?? 0,
           media_type: item.mediaType || item.type || item.media_type,
-          badge: (item.mediaType || item.type || item.media_type) === "tv" ? "New series" : "Coming soon",
+          badge: getReleaseBadge(item.releaseDate || item.release_date || item.first_air_date),
           read: false,
         })),
       );
       const feedMatches = responses.flatMap(({ radar, results }) =>
-        results.slice(0, 2).map((item) => ({
+        results.slice(0, MAX_RESULTS_PER_RADAR).map((item) => ({
           id: `${item.media_type}-${item.id}-${radar.id}`,
+          radarId: radar.id,
+          tmdbId: String(item.id),
           title: item.title || item.name,
           release_date: item.release_date,
           vote_average: item.vote_average || 0,
@@ -742,7 +816,7 @@ export default function Home() {
               <p className="spotlight-synopsis">{spotlightMatch.overview || "A new story is finding its way to your watchlist. Your radars are keeping an eye on it."}</p>
               <div className="spotlight-actions">
                 <span className="hero-alert"><FaCheck /> Alert Active</span>
-                <button className="preview-button" onClick={() => setPreviewItem(spotlightMatch)}><FaCirclePlay /> Preview Details</button>
+                <button className="preview-button" onClick={() => openPreview(spotlightMatch)}><FaCirclePlay /> Preview Details</button>
               </div>
             </div>
             <div className="hero-stats">
@@ -784,7 +858,7 @@ export default function Home() {
                   item={item}
                   key={item.id}
                   onMarkRead={() => markNotificationRead(item.id)}
-                  onPreview={() => setPreviewItem(item)}
+                  onPreview={() => openPreview(item)}
                 />
               )) : <EmptyState title={notificationFilter === "unread" ? "You’re all caught up" : "No alerts here yet"} copy="Check for new matches to see what your radars have found." />}
             </div>
@@ -876,7 +950,15 @@ export default function Home() {
                 </div>
               )}
               <div className="title-grid">
-                {filteredMatches.length ? filteredMatches.map((item, index) => <TitleCard item={item} index={index} key={item.id} />) : <EmptyState title="No matches for this radar yet" copy="Check for new matches and we’ll let you know when something fits." />}
+                {filteredMatches.length ? filteredMatches.map((item, index) => (
+                  <TitleCard
+                    item={item}
+                    index={index}
+                    key={item.id}
+                    onPreview={() => openPreview(item)}
+                    onWatchTrailer={() => openPreview(item, true)}
+                  />
+                )) : <EmptyState title="No matches for this radar yet" copy="Check for new matches and we’ll let you know when something fits." />}
               </div>
             </section>
 
@@ -897,21 +979,52 @@ export default function Home() {
       {isModalOpen && <InterestModal key={editingRadar?.id || "new"} radar={editingRadar} onClose={() => { setIsModalOpen(false); setEditingRadar(null); }} onSave={saveRadar} />}
 
       {previewItem && (
-        <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setPreviewItem(null)}>
+        <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closePreview()}>
           <section className="preview-modal" aria-labelledby="preview-title" role="dialog" aria-modal="true">
-            <div className="preview-art" style={posterStyle(previewItem, 0)} />
+            <div className="preview-art" style={posterStyle(previewItem, 0)}>
+              {isTrailerPlaying && trailerKey && (
+                <iframe
+                  src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(trailerKey)}?autoplay=1&rel=0`}
+                  title={`${previewItem.title} trailer`}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              )}
+            </div>
             <div className="preview-details">
-              <button className="icon-button preview-close" onClick={() => setPreviewItem(null)} aria-label="Close preview"><FaXmark /></button>
+              <button className="icon-button preview-close" onClick={closePreview} aria-label="Close preview"><FaXmark /></button>
               <p className="eyebrow"><span className="eyebrow-dot" /> RADAR MATCH</p>
               <h2 id="preview-title">{previewItem.title}</h2>
               <div className="spotlight-meta">
-                <span className="spotlight-date"><FaCalendar /> {formatDate(previewItem.release_date)}</span>
-                <span className="spotlight-rating"><FaStar /> {Number(previewItem.vote_average).toFixed(1)}</span>
-                <span className="spotlight-type">{mediaLabel(previewItem.media_type)}</span>
+                <span className="spotlight-date"><FaCalendar /> {formatDate(previewItem.release_date || previewItem.releaseDate)}</span>
+                <span className="spotlight-rating"><FaStar /> {Number(previewItem.vote_average ?? previewItem.rating ?? 0).toFixed(1)}</span>
+                <span className="spotlight-type">{mediaLabel(previewItem.media_type || previewItem.mediaType)}</span>
+                {getGenreNames(previewItem).map((genre) => <span className="preview-genre-pill" key={genre}>{genre}</span>)}
               </div>
               <p className="preview-synopsis">{previewItem.overview || "Keep this title on your radar. We’ll let you know when there’s more to see."}</p>
               <div className="preview-match"><FaWandMagicSparkles /> Matched by <b>{previewItem.radar || "your interest radars"}</b></div>
-              <button className="primary-button preview-done" onClick={() => setPreviewItem(null)}>Back to your radars</button>
+              {trailerError && <p className="trailer-error" role="status">{trailerError}</p>}
+              <div className="preview-actions">
+                {isTrailerLoading ? (
+                  <button className="primary-button trailer-button" disabled>
+                    <FaCirclePlay /> Finding Trailer…
+                  </button>
+                ) : trailerKey ? (
+                  <button className="primary-button trailer-button" onClick={() => setIsTrailerPlaying((playing) => !playing)}>
+                    <FaCirclePlay /> {isTrailerPlaying ? "Hide Trailer" : "Watch Trailer"}
+                  </button>
+                ) : (
+                  <a
+                    className="primary-button trailer-button"
+                    href={`https://www.youtube.com/results?search_query=${encodeURIComponent(`${previewItem.title} official trailer`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <FaMagnifyingGlass /> Search Trailer on YouTube
+                  </a>
+                )}
+                <button className="secondary-button preview-done" onClick={closePreview}>Close</button>
+              </div>
             </div>
           </section>
         </div>
@@ -941,7 +1054,7 @@ export default function Home() {
   );
 }
 
-function TitleCard({ item, index }) {
+function TitleCard({ item, index, onPreview, onWatchTrailer }) {
   const posterUrl = item.posterUrl || item.poster || "";
   const [posterFailed, setPosterFailed] = useState(false);
 
@@ -950,7 +1063,19 @@ function TitleCard({ item, index }) {
   }, [posterUrl]);
 
   return (
-    <article className="title-card">
+    <article
+      className="title-card"
+      tabIndex={0}
+      role="group"
+      aria-label={`Preview ${item.title}`}
+      onClick={onPreview}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onPreview();
+        }
+      }}
+    >
       <div className={`poster art-${index % 4}`}>
         {posterUrl && !posterFailed ? (
           <Image
@@ -971,6 +1096,14 @@ function TitleCard({ item, index }) {
         )}
         <span className="poster-badge"><FaRegClock /> {getReleaseBadge(item.release_date)}</span>
         <span className="poster-rating"><FaStar /> {item.vote_average.toFixed(1)}</span>
+        <div className="poster-action-overlay">
+          <button type="button" onClick={(event) => { event.stopPropagation(); onPreview(); }}>
+            <FaCirclePlay /> Preview Details
+          </button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); onWatchTrailer(); }}>
+            <FaCirclePlay /> Watch Trailer
+          </button>
+        </div>
         <div className="poster-overlay">
           {!posterFailed && posterUrl && <span className="poster-title">{item.title}</span>}
           <span className="poster-date">{formatDate(item.release_date)}</span>

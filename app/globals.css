@@ -326,7 +326,7 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .text-link:hover { color: #ff9aab; }
 .text-link svg { font-size: 9px; }
 .title-grid { display: grid; gap: 17px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.title-card { min-width: 0; }
+.title-card { cursor: pointer; min-width: 0; }
 .poster {
   aspect-ratio: 2 / 3;
   background: #171a23;
@@ -350,6 +350,12 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .poster-badge { left: 9px; }
 .poster-rating { right: 9px; }
 .poster-rating svg { color: var(--amber); font-size: 8px; }
+.poster-action-overlay { align-items: center; display: flex; flex-direction: column; gap: 8px; inset: 0; justify-content: center; opacity: 0; padding: 14px; pointer-events: none; position: absolute; transition: opacity .2s ease; z-index: 3; }
+.poster-action-overlay::before { background: rgba(5,7,12,.66); content: ""; inset: 0; position: absolute; }
+.poster-action-overlay button { align-items: center; background: rgba(20,23,32,.92); border: 1px solid rgba(255,255,255,.2); border-radius: 8px; color: #f7f7f9; display: inline-flex; font-size: 12px; font-weight: 650; gap: 8px; justify-content: center; min-height: 38px; padding: 0 12px; pointer-events: auto; position: relative; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
+.poster-action-overlay button:hover { background: #e11d48; border-color: #fb7185; transform: translateY(-1px); }
+.poster-action-overlay button svg { font-size: 13px; }
+.title-card:hover .poster-action-overlay, .title-card:focus-within .poster-action-overlay { opacity: 1; }
 .poster-overlay { bottom: 10px; display: flex; flex-direction: column; left: 10px; position: absolute; right: 10px; z-index: 2; }
 .poster-title { color: white; font-size: 16px; font-weight: 750; letter-spacing: -.35px; line-height: 1.1; text-shadow: 0 2px 10px rgba(0,0,0,.4); }
 .poster-date { align-items: center; align-self: flex-start; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.13); border-radius: 4px; color: #e1e2e7; display: inline-flex; font-size: 8px; gap: 5px; margin-top: 7px; padding: 4px 6px; }
@@ -411,17 +417,25 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .alert-choice svg, .check-placeholder { align-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 3px; display: inline-flex; flex: 0 0 auto; font-size: 7px; height: 13px; justify-content: center; width: 13px; }
 .alert-choice.selected svg { background: var(--rose); border-color: var(--rose); color: white; }
 
-.preview-modal { display: grid; grid-template-columns: .82fr 1.18fr; max-width: 760px; min-height: 380px; overflow: hidden; padding: 0; }
-.preview-art { background-color: #24202b; background-position: center; background-size: cover; min-height: 380px; position: relative; }
+.preview-modal { border-color: rgba(255,255,255,.15); border-radius: 18px; display: grid; grid-template-columns: .9fr 1.1fr; max-width: 896px; min-height: 480px; overflow: hidden; padding: 0; }
+.preview-art { background-color: #24202b; background-position: center; background-size: cover; min-height: 480px; position: relative; }
 .preview-art::after { background: linear-gradient(0deg, rgba(0,0,0,.5), transparent 65%); content: ""; inset: 0; position: absolute; }
-.preview-details { align-self: center; padding: 32px; position: relative; }
+.preview-art iframe { border: 0; height: 100%; inset: 0; position: absolute; width: 100%; z-index: 1; }
+.preview-details { align-self: center; padding: 40px; position: relative; }
 .preview-close { position: absolute; right: 16px; top: 16px; }
-.preview-details h2 { color: #fff; font-size: 30px; letter-spacing: -1px; line-height: 1.05; margin: 13px 0; }
-.preview-synopsis { color: #a9aeba; font-size: 11px; line-height: 1.65; margin: 17px 0; }
-.preview-match { align-items: center; color: #f17b92; display: flex; flex-wrap: wrap; font-size: 10px; gap: 6px; }
-.preview-match svg { font-size: 10px; }
+.preview-details h2 { color: #fff; font-size: clamp(24px, 3vw, 32px); font-weight: 750; letter-spacing: -.8px; line-height: 1.12; margin: 16px 0; padding-right: 28px; }
+.preview-details .spotlight-meta { gap: 8px; }
+.preview-details .spotlight-date, .preview-details .spotlight-rating, .preview-details .spotlight-type, .preview-genre-pill { font-size: 14px; font-weight: 600; }
+.preview-genre-pill { background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12); border-radius: 999px; color: #d3d5dc; padding: 5px 10px; }
+.preview-synopsis { color: #e2e8f0; font-size: 16px; line-height: 1.65; margin: 21px 0; }
+.preview-match { align-items: center; color: #f17b92; display: flex; flex-wrap: wrap; font-size: 14px; gap: 8px; }
+.preview-match svg { font-size: 14px; }
 .preview-match b { color: #e0e1e5; }
-.preview-done { margin-top: 23px; }
+.preview-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 25px; }
+.preview-done { margin-top: 0; }
+.trailer-button { min-height: 44px; text-decoration: none; }
+.trailer-loading { color: #a9aeba; font-size: 14px; }
+.trailer-error { color: #fda4af; font-size: 14px; margin: 14px 0 0; }
 
 .drawer-backdrop { align-items: stretch; justify-content: flex-end; padding: 0; }
 .notification-drawer { animation: slideIn .2s ease-out; background: #101219; border-left: 1px solid rgba(255,255,255,.12); box-shadow: -16px 0 48px rgba(0,0,0,.5); display: flex; flex-direction: column; height: 100%; max-width: 440px; padding: 26px 23px 20px; width: min(100%, 440px); }
@@ -521,9 +535,12 @@ button:disabled { cursor: not-allowed; opacity: .58; }
   .interest-modal h2 { font-size: 22px; }
   .choice-chip { font-size: 9px; min-height: 27px; padding: 0 8px; }
   .alert-choice { font-size: 8px; gap: 5px; padding: 0 6px; }
-  .preview-modal { grid-template-columns: 1fr; max-width: 440px; }
-  .preview-art { min-height: 180px; }
-  .preview-details { padding: 23px; }
+  .preview-modal { grid-template-columns: 1fr; max-height: 92vh; max-width: 560px; overflow-y: auto; }
+  .preview-art { min-height: 240px; }
+  .preview-details { padding: 24px; }
+}
+@media (hover: none) {
+  .poster-action-overlay { opacity: 1; }
 }
 @media (max-width: 480px) {
   .site-header { gap: 9px; }
